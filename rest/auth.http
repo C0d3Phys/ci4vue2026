@@ -1,2 +1,2 @@
 ### Ping backend
-GET http://localhost/
+GET http://localhost/api/users/
