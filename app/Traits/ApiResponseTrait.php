@@ -23,26 +23,19 @@ trait ApiResponseTrait
         'server_error'      => 500,
     ];
 
-    /**
-     * Formato estándar requerido:
-     * Éxito: { "status":"success", "data":{}, "message": null }
-     * Error: { "status":"error", "data": null, "message":"Descripción del error", "errors": {} }
-     *
-     * Nota: NO usar para 204 No Content (por estándar HTTP, 204 no debe tener body).
-     */
     protected function apiRespond(
         array|string|null $data = null,
         int $httpCode = 200,
         ?string $message = null,
         array $errors = []
     ): ResponseInterface {
-        $isOk = ($httpCode >= 200 && $httpCode < 300);
-
-        // 204 no debe llevar body; si alguien lo llama por error, devolvemos solo status.
+        // 204 No Content: sin body
         if ($httpCode === $this->codes['no_content']) {
             $response = $this->response ?? service('response');
             return $response->setStatusCode($httpCode);
         }
+
+        $isOk = ($httpCode >= 200 && $httpCode < 300);
 
         $payload = [
             'status'  => $isOk ? 'success' : 'error',
@@ -51,31 +44,32 @@ trait ApiResponseTrait
         ];
 
         if (!$isOk) {
-            // Forzar {} en JSON cuando está vacío
             $payload['errors'] = empty($errors) ? (object)[] : $errors;
         }
 
         $response = $this->response ?? service('response');
-
         return $response->setStatusCode($httpCode)->setJSON($payload);
     }
 
-    public function success(array $data = [], ?string $message = null): ResponseInterface
+    public function success(array $data = []): ResponseInterface
     {
-        // Para cumplir estrictamente tu estándar, $message debería ser null en éxito.
-        return $this->apiRespond($data, $this->codes['ok'], $message);
+        return $this->apiRespond($data, $this->codes['ok'], null);
     }
 
-    public function created(array $data = [], ?string $message = null): ResponseInterface
+    public function created(array $data = []): ResponseInterface
     {
-        return $this->apiRespond($data, $this->codes['created'], $message);
+        return $this->apiRespond($data, $this->codes['created'], null);
     }
 
     public function noContent(): ResponseInterface
     {
-        // 204 sin body (estándar HTTP)
         $response = $this->response ?? service('response');
         return $response->setStatusCode($this->codes['no_content']);
+    }
+
+    public function badRequest(string $message = 'Solicitud inválida', array $errors = []): ResponseInterface
+    {
+        return $this->apiRespond(null, $this->codes['bad_request'], $message, $errors);
     }
 
     public function error(string $message, int $httpCode = 400, array $errors = []): ResponseInterface
@@ -98,6 +92,11 @@ trait ApiResponseTrait
         return $this->apiRespond(null, $this->codes['forbidden'], $message, $errors);
     }
 
+    public function conflict(string $message = 'Conflicto', array $errors = []): ResponseInterface
+    {
+        return $this->apiRespond(null, $this->codes['conflict'], $message, $errors);
+    }
+
     public function tooManyRequests(string $message = 'Demasiadas solicitudes', array $errors = []): ResponseInterface
     {
         return $this->apiRespond(null, $this->codes['too_many_requests'], $message, $errors);
@@ -108,29 +107,24 @@ trait ApiResponseTrait
         return $this->apiRespond(null, $this->codes['gone'], $message, $errors);
     }
 
-    /**
-     * Maneja el caso más común: CI4 devuelve un array de errores por campo.
-     * Puede venir como:
-     *  - ['email' => '...']
-     *  - ['email' => ['...', '...'], 'name' => '...']
-     */
+    // Siempre array por campo (más simple para frontend)
     public function validationError(array $errors, string $message = 'Errores de validación'): ResponseInterface
     {
         $normalized = [];
 
         foreach ($errors as $field => $err) {
             if (is_string($err)) {
-                $normalized[$field] = $err;
+                $normalized[$field] = [$err];
                 continue;
             }
 
             if (is_array($err)) {
                 $list = array_values(array_filter($err, fn($v) => is_string($v) && $v !== ''));
-                $normalized[$field] = count($list) === 1 ? $list[0] : $list;
+                $normalized[$field] = $list;
                 continue;
             }
 
-            $normalized[$field] = (string) $err;
+            $normalized[$field] = [(string) $err];
         }
 
         return $this->apiRespond(null, $this->codes['unprocessable'], $message, $normalized);
@@ -141,10 +135,11 @@ trait ApiResponseTrait
         $errors = [];
 
         if (ENVIRONMENT === 'development' && $exception) {
-            // OJO: esto puede exponer info sensible; úsalo solo en dev.
             $errors = [
-                'exception' => get_class($exception),
-                'trace'     => substr($exception->getTraceAsString(), 0, 4000),
+                'debug' => [
+                    'exception' => get_class($exception),
+                    'trace'     => substr($exception->getTraceAsString(), 0, 4000),
+                ],
             ];
         }
 
