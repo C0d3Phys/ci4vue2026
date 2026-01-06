@@ -56,6 +56,11 @@ trait ApiResponseTrait
         return $this->apiRespond($data, $this->codes['ok'], null);
     }
 
+    public function successMessage(string $message): ResponseInterface
+    {
+        return $this->apiRespond(null, $this->codes['ok'], $message);
+    }
+
     public function created(array $data = []): ResponseInterface
     {
         return $this->apiRespond($data, $this->codes['created'], null);
