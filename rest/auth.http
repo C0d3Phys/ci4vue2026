@@ -1,38 +1,71 @@
 ### =========================
-### Config (ajusta si usas otro host)
+### Config (Laragon/CI4)
+### AJUSTA según cómo sirves el proyecto:
+### - Si usas VirtualHost apuntando a /public:  http://ci4vue2026.test
+### - Si usas localhost normal:                 http://localhost/
 ### =========================
-@baseUrl = http://localhost/api/v1
 
-# Si tu API corre en otro puerto:
-# @baseUrl = http://localhost:8080/api
 
-# Credenciales de prueba (ajusta a tu caso)
-@email = cesar@test.com
-@password = 123456
+@host = http://localhost/
 
-# Variables que vamos a rellenar manualmente o con tu editor
-@accessToken = REEMPLAZA_CON_TOKEN
+@baseUrl = {{host}}/api/v1
+
+### =========================
+### Credenciales seed (CoreSeeder)
+### =========================
 @userId = 1
+@email = admin@demo.local
+@password = admin123
+
+@tenantId = 1
+@tenantName = Empresa Demo
+
+@branchId = 1
+@branchCode = MAIN
+@branchName = Sucursal Principal
+
+@roleId = 1
+@roleName = SuperAdmin
+
+# Token (lo pegas tras el login)
+@accessToken = REEMPLAZA_CON_TOKEN
+
+### =========================
+### 0) PING (debug rápido)
+### Si esto falla (404 HTML), NO estás llegando a CI4 (problema /public o rewrite)
+### =========================
+GET {{host}}/index.php
+Accept: text/html
 
 
 ### =========================
-### 1) LOGIN (NoAuthFilter) - sin token (debe PERMITIR)
-### Esperado: 200/201 success (o error 401/422 si credenciales inválidas)
+### 1) LOGIN (sin token) - debe PERMITIR
+### Esperado: 200 success + access_token
 ### =========================
 POST {{baseUrl}}/auth/login
 Content-Type: application/json
 Accept: application/json
 
 {
-  "tenant_id": 1,
+  "tenant_id": {{tenantId}},
   "email": "{{email}}",
   "password": "{{password}}"
 }
 
 
 ### =========================
-### 2) LOGIN (NoAuthFilter) - con token (debe BLOQUEAR)
-### Esperado: 409 error "Ya autenticado" (según tu NoAuthFilter)
+### 2) ME (con token) - debe PERMITIR
+### Esperado: 200 success
+### =========================
+GET {{baseUrl}}/auth/me
+Accept: application/json
+Authorization: Bearer {{accessToken}}
+
+
+### =========================
+### 3) LOGIN (con token) - si tienes NoAuthFilter debería BLOQUEAR
+### Nota: esto depende de que hayas aplicado NoAuthFilter a /auth/login
+### Esperado: 409 o 403 (según tu diseño)
 ### =========================
 POST {{baseUrl}}/auth/login
 Content-Type: application/json
@@ -40,14 +73,15 @@ Accept: application/json
 Authorization: Bearer {{accessToken}}
 
 {
+  "tenant_id": {{tenantId}},
   "email": "{{email}}",
   "password": "{{password}}"
 }
 
 
 ### =========================
-### 3) LOGOUT (AuthFilter) - sin token (debe BLOQUEAR)
-### Esperado: 401 error "Falta token Bearer" (o el mensaje que definiste)
+### 4) LOGOUT - sin token (debe BLOQUEAR si AuthFilter está aplicado)
+### Esperado: 401
 ### =========================
 POST {{baseUrl}}/auth/logout
 Content-Type: application/json
@@ -57,8 +91,8 @@ Accept: application/json
 
 
 ### =========================
-### 4) LOGOUT (AuthFilter) - token inválido (debe BLOQUEAR)
-### Esperado: 401 error "Token inválido o expirado"
+### 5) LOGOUT - token inválido (debe BLOQUEAR)
+### Esperado: 401
 ### =========================
 POST {{baseUrl}}/auth/logout
 Content-Type: application/json
@@ -69,8 +103,8 @@ Authorization: Bearer ESTE_TOKEN_NO_EXISTE
 
 
 ### =========================
-### 5) LOGOUT (AuthFilter) - token válido (debe PERMITIR)
-### Esperado: 200 success (o 204 noContent si así lo diseñaste)
+### 6) LOGOUT - token válido (debe PERMITIR)
+### Esperado: 200 success (o 204 noContent)
 ### =========================
 POST {{baseUrl}}/auth/logout
 Content-Type: application/json
@@ -81,15 +115,15 @@ Authorization: Bearer {{accessToken}}
 
 
 ### =========================
-### 6) RUTA PROTEGIDA (AuthFilter) - ejemplo /users
-### Sin token (debe BLOQUEAR) -> 401
+### 7) USERS - sin token (debe BLOQUEAR si AuthFilter)
+### Esperado: 401
 ### =========================
 GET {{baseUrl}}/users
 Accept: application/json
 
 
 ### =========================
-### 7) RUTA PROTEGIDA (AuthFilter) - ejemplo /users con token (debe PERMITIR)
+### 8) USERS - con token (debe PERMITIR)
 ### =========================
 GET {{baseUrl}}/users
 Accept: application/json
