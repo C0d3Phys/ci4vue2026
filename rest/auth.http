@@ -1,2 +1,95 @@
-### Ping backend
-GET http://localhost/api/users/
+### =========================
+### Config (ajusta si usas otro host)
+### =========================
+@baseUrl = http://localhost/api
+
+# Si tu API corre en otro puerto:
+# @baseUrl = http://localhost:8080/api
+
+# Credenciales de prueba (ajusta a tu caso)
+@email = cesar@test.com
+@password = 123456
+
+# Variables que vamos a rellenar manualmente o con tu editor
+@accessToken = REEMPLAZA_CON_TOKEN
+@userId = 1
+
+
+### =========================
+### 1) LOGIN (NoAuthFilter) - sin token (debe PERMITIR)
+### Esperado: 200/201 success (o error 401/422 si credenciales inválidas)
+### =========================
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+Accept: application/json
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}"
+}
+
+
+### =========================
+### 2) LOGIN (NoAuthFilter) - con token (debe BLOQUEAR)
+### Esperado: 409 error "Ya autenticado" (según tu NoAuthFilter)
+### =========================
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+Accept: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "email": "{{email}}",
+  "password": "{{password}}"
+}
+
+
+### =========================
+### 3) LOGOUT (AuthFilter) - sin token (debe BLOQUEAR)
+### Esperado: 401 error "Falta token Bearer" (o el mensaje que definiste)
+### =========================
+POST {{baseUrl}}/auth/logout
+Content-Type: application/json
+Accept: application/json
+
+{}
+
+
+### =========================
+### 4) LOGOUT (AuthFilter) - token inválido (debe BLOQUEAR)
+### Esperado: 401 error "Token inválido o expirado"
+### =========================
+POST {{baseUrl}}/auth/logout
+Content-Type: application/json
+Accept: application/json
+Authorization: Bearer ESTE_TOKEN_NO_EXISTE
+
+{}
+
+
+### =========================
+### 5) LOGOUT (AuthFilter) - token válido (debe PERMITIR)
+### Esperado: 200 success (o 204 noContent si así lo diseñaste)
+### =========================
+POST {{baseUrl}}/auth/logout
+Content-Type: application/json
+Accept: application/json
+Authorization: Bearer {{accessToken}}
+
+{}
+
+
+### =========================
+### 6) RUTA PROTEGIDA (AuthFilter) - ejemplo /users
+### Sin token (debe BLOQUEAR) -> 401
+### =========================
+GET {{baseUrl}}/users
+Accept: application/json
+
+
+### =========================
+### 7) RUTA PROTEGIDA (AuthFilter) - ejemplo /users con token (debe PERMITIR)
+### =========================
+GET {{baseUrl}}/users
+Accept: application/json
+Authorization: Bearer {{accessToken}}
