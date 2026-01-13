@@ -3,7 +3,6 @@
 /node_modules/
 
 # CodeIgniter specific
-/writable/
 /.env
 /composer.lock
 
@@ -52,7 +51,3 @@ Thumbs.db
 # Database
 *.sqlite
 *.db
-
-# Other
-.htaccess
-robots.txt
