@@ -19,13 +19,22 @@ class Error404Controller extends BaseController
      */
     public function index(?string $message = null): ResponseInterface
     {
-        // Mensaje por defecto si no viene nada
-        $msg = (ENVIRONMENT === 'development')
-            ? ($message ?? 'Endpoint no encontrado')
-            : 'Endpoint no encontrado';
+        // Si NO es API, deja el 404 normal (HTML) para web
+        if (! str_starts_with($this->request->getPath(), 'api')) {
+            throw \CodeIgniter\Exceptions\PageNotFoundException::forPageNotFound();
+        }
 
-        // Tu estándar de error:
-        // { status:"error", data:null, message:"...", errors:{} }
+        $default = 'Endpoint no encontrado';
+        $msg = $default;
+
+        // En desarrollo permitimos mensaje si viene útil (no vacío)
+        if (ENVIRONMENT === 'development') {
+            $candidate = trim((string) $message);
+            if ($candidate !== '') {
+                $msg = $candidate;
+            }
+        }
+
         return $this->notFound($msg);
     }
 }
