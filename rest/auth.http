@@ -1,7 +1,7 @@
 ### =========================
 ### Config (ajusta si usas otro host)
 ### =========================
-@baseUrl = http://localhost/api
+@baseUrl = http://localhost/api/v1
 
 # Si tu API corre en otro puerto:
 # @baseUrl = http://localhost:8080/api
@@ -24,6 +24,7 @@ Content-Type: application/json
 Accept: application/json
 
 {
+  "tenant_id": 1,
   "email": "{{email}}",
   "password": "{{password}}"
 }
