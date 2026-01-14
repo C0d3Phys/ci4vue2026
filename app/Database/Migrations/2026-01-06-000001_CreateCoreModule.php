@@ -21,7 +21,7 @@ final class CreateCoreModule extends Migration
          * - user_branches (allowlist)
          * - roles
          * - user_roles
-         * - auth_tokens (para revocación/logout; token=jti o token random)
+         * - auth_tokens (para revocación/logout; token=jti)
          * - audit_log (ligero)
          */
 
@@ -43,7 +43,7 @@ final class CreateCoreModule extends Migration
             'id'         => ['type' => 'BIGINT', 'unsigned' => true, 'auto_increment' => true],
             'tenant_id'  => ['type' => 'BIGINT', 'unsigned' => true],
             'name'       => ['type' => 'VARCHAR', 'constraint' => 120],
-            'code'       => ['type' => 'VARCHAR', 'constraint' => 30, 'null' => true], // opcional: MAN, LEON, etc.
+            'code'       => ['type' => 'VARCHAR', 'constraint' => 30, 'null' => true],
             'status'     => ['type' => 'VARCHAR', 'constraint' => 20, 'default' => 'active'],
             'created_at' => ['type' => 'DATETIME', 'null' => true],
             'updated_at' => ['type' => 'DATETIME', 'null' => true],
@@ -62,13 +62,12 @@ final class CreateCoreModule extends Migration
             'name'              => ['type' => 'VARCHAR', 'constraint' => 120],
             'email'             => ['type' => 'VARCHAR', 'constraint' => 160],
             'password_hash'     => ['type' => 'VARCHAR', 'constraint' => 255],
-            'status'            => ['type' => 'VARCHAR', 'constraint' => 20, 'default' => 'active'], // active/blocked
+            'status'            => ['type' => 'VARCHAR', 'constraint' => 20, 'default' => 'active'],
             'created_at'        => ['type' => 'DATETIME', 'null' => true],
             'updated_at'        => ['type' => 'DATETIME', 'null' => true],
         ]);
         $this->forge->addKey('id', true);
-        // email único por tenant (evita choque entre empresas)
-        $this->forge->addKey(['tenant_id', 'email'], false, true);
+        $this->forge->addKey(['tenant_id', 'email'], false, true); // email único por tenant
         $this->forge->addKey(['tenant_id', 'default_branch_id']);
         $this->forge->addForeignKey('tenant_id', 'tenants', 'id', 'CASCADE', 'RESTRICT');
         $this->forge->addForeignKey('default_branch_id', 'branches', 'id', 'SET NULL', 'RESTRICT');
@@ -107,24 +106,31 @@ final class CreateCoreModule extends Migration
         $this->forge->addForeignKey('role_id', 'roles', 'id', 'CASCADE', 'RESTRICT');
         $this->forge->createTable('user_roles', true);
 
-        // 7) auth_tokens (revocación/logout)
-        // Nota: aquí puedes guardar:
-        // - token random (varchar 128) si NO usas JWT todavía
-        // - o jti (uuid/hex) si luego migras a JWT
+        // 7) auth_tokens (revocación/logout con JWT)
+        // IMPORTANTE: token guarda el JTI del JWT para permitir revocación
         $this->forge->addField([
-            'id'         => ['type' => 'BIGINT', 'unsigned' => true, 'auto_increment' => true],
-            'user_id'    => ['type' => 'BIGINT', 'unsigned' => true],
-            'token'      => ['type' => 'VARCHAR', 'constraint' => 128], // token o jti
-            'expires_at' => ['type' => 'DATETIME', 'null' => true],
-            'revoked_at' => ['type' => 'DATETIME', 'null' => true],
-            'created_at' => ['type' => 'DATETIME', 'null' => true],
+            'id'           => ['type' => 'BIGINT', 'unsigned' => true, 'auto_increment' => true],
+            'user_id'      => ['type' => 'BIGINT', 'unsigned' => true],
+            'token'        => ['type' => 'VARCHAR', 'constraint' => 255], // JTI (32-64 chars hex)
+            'expires_at'   => ['type' => 'DATETIME'],
+            'revoked_at'   => ['type' => 'DATETIME', 'null' => true],
+            'created_at'   => ['type' => 'DATETIME', 'null' => true],
+            'updated_at'   => ['type' => 'DATETIME', 'null' => true],
             'last_used_at' => ['type' => 'DATETIME', 'null' => true],
-            'ip'         => ['type' => 'VARCHAR', 'constraint' => 45, 'null' => true],
-            'user_agent' => ['type' => 'TEXT', 'null' => true],
+            'ip'           => ['type' => 'VARCHAR', 'constraint' => 45, 'null' => true],
+            'user_agent'   => ['type' => 'TEXT', 'null' => true],
         ]);
         $this->forge->addKey('id', true);
-        $this->forge->addKey(['user_id', 'token'], false, true); // token único por usuario
-        $this->forge->addKey('token'); // lookup rápido por token
+
+        // 🔥 CAMBIO IMPORTANTE: Token debe ser único GLOBALMENTE (no por user_id)
+        // porque el JTI es único en todo el sistema
+        $this->forge->addKey('token', false, true); // unique constraint en token solo
+
+        // Índices para búsquedas rápidas
+        $this->forge->addKey('user_id'); // buscar por usuario
+        $this->forge->addKey(['user_id', 'revoked_at', 'expires_at']); // sesiones activas
+        $this->forge->addKey(['revoked_at', 'expires_at']); // cleanup de tokens expirados
+
         $this->forge->addForeignKey('user_id', 'users', 'id', 'CASCADE', 'RESTRICT');
         $this->forge->createTable('auth_tokens', true);
 
@@ -137,13 +143,16 @@ final class CreateCoreModule extends Migration
             'action'     => ['type' => 'VARCHAR', 'constraint' => 80], // ej: auth.login, users.create
             'entity'     => ['type' => 'VARCHAR', 'constraint' => 80], // ej: users
             'entity_id'  => ['type' => 'BIGINT', 'unsigned' => true, 'null' => true],
-            'method'     => ['type' => 'VARCHAR', 'constraint' => 10, 'null' => true],
+            'method'     => ['type' => 'VARCHAR', 'constraint' => 10, 'null' => true], // GET, POST, etc.
             'path'       => ['type' => 'VARCHAR', 'constraint' => 255, 'null' => true],
+            'ip'         => ['type' => 'VARCHAR', 'constraint' => 45, 'null' => true],
             'created_at' => ['type' => 'DATETIME', 'null' => true],
         ]);
         $this->forge->addKey('id', true);
+        $this->forge->addKey(['tenant_id', 'created_at']); // queries por fecha
         $this->forge->addKey(['tenant_id', 'branch_id', 'entity', 'entity_id']);
         $this->forge->addKey(['tenant_id', 'action']);
+        $this->forge->addKey(['user_id', 'created_at']); // actividad por usuario
         $this->forge->addForeignKey('tenant_id', 'tenants', 'id', 'CASCADE', 'RESTRICT');
         $this->forge->addForeignKey('branch_id', 'branches', 'id', 'SET NULL', 'RESTRICT');
         $this->forge->addForeignKey('user_id', 'users', 'id', 'SET NULL', 'RESTRICT');
