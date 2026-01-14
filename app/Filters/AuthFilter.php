@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Filters;
 
+use App\Models\AuthTokenModel;
 use CodeIgniter\Filters\FilterInterface;
 use CodeIgniter\HTTP\RequestInterface;
 use CodeIgniter\HTTP\ResponseInterface;
@@ -12,6 +13,13 @@ use Firebase\JWT\Key;
 
 final class AuthFilter implements FilterInterface
 {
+    private $authTokenModel;
+
+    public function __construct()
+    {
+        $this->authTokenModel = model(AuthTokenModel::class);
+    }
+
     public function before(RequestInterface $request, $arguments = null)
     {
         // 1) Extraer Bearer Token
@@ -35,15 +43,12 @@ final class AuthFilter implements FilterInterface
         }
 
         // 4) Validar contra la base de datos
-        $tokenRecord = $this->validateTokenInDatabase($jti, $userId);
+        $tokenRecord = $this->authTokenModel->findValidByJti($jti);
         if ($tokenRecord === null) {
             return $this->unauthorized('Token no reconocido o revocado');
         }
 
-        // 5) Actualizar last_used_at
-        $this->touchTokenUsage((int) $tokenRecord['id']);
-
-        // 6) Guardar contexto del usuario autenticado
+        // 5) Guardar contexto del usuario autenticado
         $this->setAuthContext([
             'user_id' => $userId,
             'tenant_id' => (int) ($payload['tid'] ?? 0),
@@ -99,48 +104,6 @@ final class AuthFilter implements FilterInterface
         } catch (\Throwable $e) {
             log_message('error', 'Error decodificando JWT: ' . $e->getMessage());
             return null;
-        }
-    }
-
-    private function validateTokenInDatabase(string $jti, int $userId): ?array
-    {
-        $db = db_connect();
-
-        $row = $db->table('auth_tokens')
-            ->select('id, user_id, revoked_at, expires_at, last_used_at')
-            ->where('token', $jti)
-            ->where('user_id', $userId)
-            ->get()
-            ->getRowArray();
-
-        if (!$row) {
-            return null;
-        }
-
-        // Verificar si está revocado
-        if (!empty($row['revoked_at'])) {
-            return null;
-        }
-
-        // Verificar expiración (doble check además del JWT exp)
-        if (!empty($row['expires_at']) && strtotime((string) $row['expires_at']) <= time()) {
-            return null;
-        }
-
-        return $row;
-    }
-
-    private function touchTokenUsage(int $tokenId): void
-    {
-        try {
-            db_connect()
-                ->table('auth_tokens')
-                ->where('id', $tokenId)
-                ->set(['last_used_at' => date('Y-m-d H:i:s')])
-                ->update();
-        } catch (\Throwable $e) {
-            // No fallar si no se puede actualizar, solo registrar
-            log_message('error', 'Error actualizando last_used_at: ' . $e->getMessage());
         }
     }
 

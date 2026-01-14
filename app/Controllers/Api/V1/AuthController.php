@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Controllers\Api\V1;
 
 use App\Controllers\Api\Base\ApiBaseController;
+use App\Models\UserModel;
+use App\Models\AuthTokenModel;
 use CodeIgniter\HTTP\ResponseInterface;
 use Firebase\JWT\JWT;
 use Firebase\JWT\Key;
@@ -13,6 +15,15 @@ final class AuthController extends ApiBaseController
 {
     private const TOKEN_BYTE_LENGTH = 16;
     private const MAX_ACTIVE_SESSIONS = 5; // Limitar sesiones concurrentes
+
+    private $userModel;
+    private $authTokenModel;
+
+    public function __construct()
+    {
+        $this->userModel = model(UserModel::class);
+        $this->authTokenModel = model(AuthTokenModel::class);
+    }
 
     public function login(): ResponseInterface
     {
@@ -30,7 +41,7 @@ final class AuthController extends ApiBaseController
             $password = $payload['password'];
 
             // Buscar usuario
-            $user = $this->findUserByEmailAndTenant($email, $tenantId);
+            $user = $this->userModel->findByEmailAndTenant($email, $tenantId);
             if (!$user) {
                 return $this->unauthorized('Credenciales inválidas');
             }
@@ -46,14 +57,20 @@ final class AuthController extends ApiBaseController
             }
 
             // Limpiar sesiones antiguas del usuario
-            $this->cleanupExpiredSessions((int) $user['id']);
-            $this->enforceSessionLimit((int) $user['id']);
+            $this->authTokenModel->cleanupExpired((int) $user['id']);
+            $this->authTokenModel->enforceSessionLimit((int) $user['id'], self::MAX_ACTIVE_SESSIONS);
 
             // Generar nuevo token
             [$jwt, $jti, $expiresAt] = $this->issueJwtForUser($user);
 
             // Guardar sesión
-            $this->saveAuthToken((int) $user['id'], $jti, $expiresAt);
+            $this->authTokenModel->createToken(
+                (int) $user['id'],
+                $jti,
+                $expiresAt,
+                $this->request->getIPAddress(),
+                (string) $this->request->getUserAgent()
+            );
 
             return $this->success([
                 'access_token' => $jwt,
@@ -79,13 +96,13 @@ final class AuthController extends ApiBaseController
             $jti = $claims['jti'];
 
             // Validar sesión
-            $session = $this->findValidSessionByJti($jti);
+            $session = $this->authTokenModel->findValidByJti($jti);
             if (!$session) {
                 return $this->unauthorized('Sesión revocada o expirada');
             }
 
             // Cargar usuario
-            $user = $this->findUserById($uid);
+            $user = $this->userModel->find($uid);
             if (!$user) {
                 return $this->unauthorized('Usuario no encontrado');
             }
@@ -117,7 +134,7 @@ final class AuthController extends ApiBaseController
             }
 
             $jti = $claims['jti'];
-            $this->revokeToken($jti);
+            $this->authTokenModel->revokeByJti($jti);
 
             return $this->successMessage('Sesión cerrada exitosamente');
         } catch (\Throwable $e) {
@@ -138,13 +155,13 @@ final class AuthController extends ApiBaseController
             $jti = $claims['jti'];
 
             // Validar sesión actual
-            $session = $this->findValidSessionByJti($jti);
+            $session = $this->authTokenModel->findValidByJti($jti);
             if (!$session) {
                 return $this->unauthorized('Sesión revocada o expirada');
             }
 
             // Cargar usuario
-            $user = $this->findUserById($uid);
+            $user = $this->userModel->find($uid);
             if (!$user) {
                 return $this->unauthorized('Usuario no encontrado');
             }
@@ -154,13 +171,19 @@ final class AuthController extends ApiBaseController
             }
 
             // Revocar token actual
-            $this->revokeToken($jti);
+            $this->authTokenModel->revokeByJti($jti);
 
             // Generar nuevo token
             [$newJwt, $newJti, $expiresAt] = $this->issueJwtForUser($user);
 
             // Guardar nueva sesión
-            $this->saveAuthToken($user['id'], $newJti, $expiresAt);
+            $this->authTokenModel->createToken(
+                (int) $user['id'],
+                $newJti,
+                $expiresAt,
+                $this->request->getIPAddress(),
+                (string) $this->request->getUserAgent()
+            );
 
             return $this->success([
                 'access_token' => $newJwt,
@@ -205,27 +228,6 @@ final class AuthController extends ApiBaseController
         }
 
         return empty($errors) ? true : $errors;
-    }
-
-    private function findUserByEmailAndTenant(string $email, int $tenantId): ?array
-    {
-        return db_connect()
-            ->table('users')
-            ->select('id, tenant_id, default_branch_id, name, email, password_hash, status')
-            ->where('tenant_id', $tenantId)
-            ->where('email', $email)
-            ->get()
-            ->getRowArray() ?: null;
-    }
-
-    private function findUserById(int $userId): ?array
-    {
-        return db_connect()
-            ->table('users')
-            ->select('id, tenant_id, default_branch_id, name, email, status')
-            ->where('id', $userId)
-            ->get()
-            ->getRowArray() ?: null;
     }
 
     private function isUserActive(array $user): bool
@@ -319,96 +321,6 @@ final class AuthController extends ApiBaseController
         $jwt = JWT::encode($claims, $secret, 'HS256');
 
         return [$jwt, $jti, date('Y-m-d H:i:s', $expTs)];
-    }
-
-    private function saveAuthToken(int $userId, string $jti, string $expiresAt): void
-    {
-        $now = date('Y-m-d H:i:s');
-
-        db_connect()->table('auth_tokens')->insert([
-            'user_id' => $userId,
-            'token' => $jti,
-            'expires_at' => $expiresAt,
-            'revoked_at' => null,
-            'created_at' => $now,
-            'last_used_at' => $now,
-            'ip' => $this->request->getIPAddress(),
-            'user_agent' => (string) $this->request->getUserAgent(),
-        ]);
-    }
-
-    private function findValidSessionByJti(string $jti): ?array
-    {
-        $db = db_connect();
-
-        $row = $db->table('auth_tokens')
-            ->select('id, user_id, token, expires_at, revoked_at, last_used_at')
-            ->where('token', $jti)
-            ->where('revoked_at IS NULL', null, false)
-            ->get()
-            ->getRowArray();
-
-        if (!$row) {
-            return null;
-        }
-
-        // Verificar expiración
-        if (!empty($row['expires_at']) && strtotime((string) $row['expires_at']) < time()) {
-            return null;
-        }
-
-        // Actualizar last_used_at
-        $db->table('auth_tokens')
-            ->where('id', (int) $row['id'])
-            ->set(['last_used_at' => date('Y-m-d H:i:s')])
-            ->update();
-
-        return $row;
-    }
-
-    private function revokeToken(string $jti): void
-    {
-        db_connect()
-            ->table('auth_tokens')
-            ->where('token', $jti)
-            ->where('revoked_at IS NULL', null, false)
-            ->set(['revoked_at' => date('Y-m-d H:i:s')])
-            ->update();
-    }
-
-    private function cleanupExpiredSessions(int $userId): void
-    {
-        db_connect()
-            ->table('auth_tokens')
-            ->where('user_id', $userId)
-            ->where('expires_at <', date('Y-m-d H:i:s'))
-            ->delete();
-    }
-
-    private function enforceSessionLimit(int $userId): void
-    {
-        $db = db_connect();
-
-        $activeSessions = $db->table('auth_tokens')
-            ->where('user_id', $userId)
-            ->where('revoked_at IS NULL', null, false)
-            ->where('expires_at >', date('Y-m-d H:i:s'))
-            ->orderBy('last_used_at', 'DESC')
-            ->get()
-            ->getResultArray();
-
-        if (count($activeSessions) >= self::MAX_ACTIVE_SESSIONS) {
-            // Revocar las sesiones más antiguas
-            $sessionsToRevoke = array_slice($activeSessions, self::MAX_ACTIVE_SESSIONS - 1);
-            $idsToRevoke = array_column($sessionsToRevoke, 'id');
-
-            if (!empty($idsToRevoke)) {
-                $db->table('auth_tokens')
-                    ->whereIn('id', $idsToRevoke)
-                    ->set(['revoked_at' => date('Y-m-d H:i:s')])
-                    ->update();
-            }
-        }
     }
 
     private function formatUserResponse(array $user): array
