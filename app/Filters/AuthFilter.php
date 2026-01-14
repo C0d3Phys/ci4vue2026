@@ -7,88 +7,166 @@ namespace App\Filters;
 use CodeIgniter\Filters\FilterInterface;
 use CodeIgniter\HTTP\RequestInterface;
 use CodeIgniter\HTTP\ResponseInterface;
+use Firebase\JWT\JWT;
+use Firebase\JWT\Key;
 
 final class AuthFilter implements FilterInterface
 {
     public function before(RequestInterface $request, $arguments = null)
     {
-        $auth = (string) $request->getHeaderLine('Authorization');
-
-        if ($auth === '' || stripos($auth, 'Bearer ') !== 0) {
-            return $this->unauthorized('Falta token Bearer');
+        // 1) Extraer Bearer Token
+        $jwt = $this->extractBearerToken($request);
+        if ($jwt === null) {
+            return $this->unauthorized('Token Bearer requerido');
         }
 
-        $jwt = trim(substr($auth, 7));
-        if ($jwt === '') {
-            return $this->unauthorized('Token vacío');
-        }
-
-        // 1) Validación criptográfica del JWT
-        // Aquí llamas a TU servicio JWT (firma/exp/iss/aud/nbf)
-        // Debe retornar payload array o null si inválido.
-        $payload = service('jwt')->decode($jwt); // <- tú implementas este service
-
-        if (!is_array($payload)) {
+        // 2) Decodificar y validar JWT
+        $payload = $this->decodeJwt($jwt);
+        if ($payload === null) {
             return $this->unauthorized('Token inválido o expirado');
         }
 
-        // 2) Extraer claims clave
-        $userId = $payload['sub'] ?? null;
-        $jti    = $payload['jti'] ?? null;
+        // 3) Extraer claims requeridos
+        $userId = (int) ($payload['uid'] ?? 0);
+        $jti = (string) ($payload['jti'] ?? '');
 
-        if (empty($userId) || empty($jti)) {
-            return $this->unauthorized('Token sin claims requeridos (sub/jti)');
+        if ($userId <= 0 || $jti === '') {
+            return $this->unauthorized('Token sin claims requeridos');
         }
 
-        // 3) Validación extra contra DB (tabla auth_tokens)
-        // Recomendado: guardar jti + user_id + expires_at + revoked_at
-        $db = db_connect();
-
-        $row = $db->table('auth_tokens')
-            ->select('id, user_id, revoked_at, expires_at')
-            ->where('jti', (string) $jti)
-            ->where('user_id', (int) $userId)
-            ->get()
-            ->getRowArray();
-
-        if (!$row) {
-            return $this->unauthorized('Token no reconocido');
+        // 4) Validar contra la base de datos
+        $tokenRecord = $this->validateTokenInDatabase($jti, $userId);
+        if ($tokenRecord === null) {
+            return $this->unauthorized('Token no reconocido o revocado');
         }
 
-        if (!empty($row['revoked_at'])) {
-            return $this->unauthorized('Token revocado');
-        }
+        // 5) Actualizar last_used_at
+        $this->touchTokenUsage((int) $tokenRecord['id']);
 
-        // Opcional: validar expiración contra DB también (además del exp del JWT)
-        if (!empty($row['expires_at']) && strtotime((string) $row['expires_at']) <= time()) {
-            return $this->unauthorized('Token expirado');
-        }
-
-        // 4) Guardar contexto para el resto de la request (controladores/servicios)
-        // Lo más práctico: un service "authCtx"
-        service('authCtx')->set([
-            'user_id' => (int) $userId,
-            'jti'     => (string) $jti,
-            'claims'  => $payload,
+        // 6) Guardar contexto del usuario autenticado
+        $this->setAuthContext([
+            'user_id' => $userId,
+            'tenant_id' => (int) ($payload['tid'] ?? 0),
+            'branch_id' => $payload['bid'] ?? null,
+            'jti' => $jti,
+            'claims' => $payload,
         ]);
 
-        return null; // deja pasar
+        return null; // Permitir continuar
     }
 
     public function after(RequestInterface $request, ResponseInterface $response, $arguments = null)
     {
-        // nada
+        // No se requiere procesamiento después de la respuesta
+        return $response;
     }
 
-    private function unauthorized(string $msg)
+    // -------------------------
+    // Private Helper Methods
+    // -------------------------
+
+    private function extractBearerToken(RequestInterface $request): ?string
+    {
+        $auth = $request->getHeaderLine('Authorization');
+
+        if ($auth === '' || stripos($auth, 'Bearer ') !== 0) {
+            return null;
+        }
+
+        $jwt = trim(substr($auth, 7));
+
+        return $jwt !== '' ? $jwt : null;
+    }
+
+    private function decodeJwt(string $jwt): ?array
+    {
+        $secret = $this->getJwtSecret();
+
+        if ($secret === '') {
+            log_message('error', 'JWT_SECRET no configurado en AuthFilter');
+            return null;
+        }
+
+        try {
+            $decoded = JWT::decode($jwt, new Key($secret, 'HS256'));
+            return (array) $decoded;
+        } catch (\Firebase\JWT\ExpiredException $e) {
+            log_message('debug', 'Token expirado: ' . $e->getMessage());
+            return null;
+        } catch (\Firebase\JWT\SignatureInvalidException $e) {
+            log_message('warning', 'Firma JWT inválida: ' . $e->getMessage());
+            return null;
+        } catch (\Throwable $e) {
+            log_message('error', 'Error decodificando JWT: ' . $e->getMessage());
+            return null;
+        }
+    }
+
+    private function validateTokenInDatabase(string $jti, int $userId): ?array
+    {
+        $db = db_connect();
+
+        $row = $db->table('auth_tokens')
+            ->select('id, user_id, revoked_at, expires_at, last_used_at')
+            ->where('token', $jti)
+            ->where('user_id', $userId)
+            ->get()
+            ->getRowArray();
+
+        if (!$row) {
+            return null;
+        }
+
+        // Verificar si está revocado
+        if (!empty($row['revoked_at'])) {
+            return null;
+        }
+
+        // Verificar expiración (doble check además del JWT exp)
+        if (!empty($row['expires_at']) && strtotime((string) $row['expires_at']) <= time()) {
+            return null;
+        }
+
+        return $row;
+    }
+
+    private function touchTokenUsage(int $tokenId): void
+    {
+        try {
+            db_connect()
+                ->table('auth_tokens')
+                ->where('id', $tokenId)
+                ->set(['last_used_at' => date('Y-m-d H:i:s')])
+                ->update();
+        } catch (\Throwable $e) {
+            // No fallar si no se puede actualizar, solo registrar
+            log_message('error', 'Error actualizando last_used_at: ' . $e->getMessage());
+        }
+    }
+
+    private function setAuthContext(array $context): void
+    {
+        // Opción 1: Usar la request para almacenar el contexto
+        service('request')->auth = (object) $context;
+
+        // Opción 2: Si tienes un servicio AuthContext, úsalo
+        // service('authContext')->set($context);
+    }
+
+    private function getJwtSecret(): string
+    {
+        return (string) env('JWT_SECRET', '');
+    }
+
+    private function unauthorized(string $message): ResponseInterface
     {
         return service('response')
             ->setStatusCode(401)
             ->setJSON([
-                'status'  => 'error',
-                'data'    => null,
-                'message' => $msg,
-                'errors'  => (object)[],
+                'status' => 'error',
+                'data' => null,
+                'message' => $message,
+                'errors' => new \stdClass(),
             ]);
     }
 }
