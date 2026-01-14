@@ -47,6 +47,7 @@ Thumbs.db
 
 # Testing
 /coverage/
+/writable/debugbar/
 
 # Database
 *.sqlite
