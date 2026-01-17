@@ -28,7 +28,7 @@
 @roleName = SuperAdmin
 
 # Token (lo pegas tras el login)
-@accessToken = eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJodHRwOi8vbG9jYWxob3N0LyIsImlhdCI6MTc2ODU4MjY3NCwibmJmIjoxNzY4NTgyNjc0LCJleHAiOjE3NjkxODc0NzQsImp0aSI6ImNkMzYwODIxNjcxNWI0MDE2MjJmMjQ2ODhkNTI0OTY2Iiwic3ViIjoiMSIsInVpZCI6MSwidGlkIjoxLCJiaWQiOjF9.DQcnQUV7FsNwWWUohLq667pOkR8cFH_al1T_glvRZrQ
+@accessToken = eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJodHRwOi8vbG9jYWxob3N0LyIsImlhdCI6MTc2ODY2Njc2MSwibmJmIjoxNzY4NjY2NzYxLCJleHAiOjE3NjkyNzE1NjEsImp0aSI6IjQwYTk5NTFjNDZlNDNmZjhkZjkzNDU1YmRmYmEwZWM2Iiwic3ViIjoiMSIsInVpZCI6MSwidGlkIjoxLCJiaWQiOjF9.khmFku7ft3C7fwAhyWNqub1r-iTmMRS6cdbp_V37KoM
 
 ### =========================
 ### 0) PING (debug rápido)

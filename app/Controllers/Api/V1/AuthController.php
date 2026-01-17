@@ -30,53 +30,66 @@ final class AuthController extends ApiBaseController
         try {
             $payload = $this->getRequestPayload();
 
-            // Validación mejorada
             $validation = $this->validateLoginPayload($payload);
             if ($validation !== true) {
                 return $this->validationError($validation);
             }
 
-            $tenantId = (int) $payload['tenant_id'];
-            $email = strtolower(trim($payload['email']));
-            $password = $payload['password'];
+            $tenantId  = (int) $payload['tenant_id'];
+            $email     = strtolower(trim((string) $payload['email']));
+            $password  = (string) $payload['password'];
 
-            // Buscar usuario
+            // 1) Buscar usuario
             $user = $this->userModel->findByEmailAndTenant($email, $tenantId);
-            if (!$user) {
+            if (! $user) {
                 return $this->unauthorized('Credenciales inválidas');
             }
 
-            // Verificar estado
-            if (!$this->isUserActive($user)) {
+            // 2) Estado
+            if (! $this->isUserActive($user)) {
                 return $this->forbidden('Usuario bloqueado');
             }
 
-            // Verificar contraseña
-            if (!$this->verifyPassword($password, $user['password_hash'])) {
+            // 3) Password
+            if (! $this->verifyPassword($password, (string) $user['password_hash'])) {
                 return $this->unauthorized('Credenciales inválidas');
             }
 
-            // Limpiar sesiones antiguas del usuario
-            $this->authTokenModel->cleanupExpired((int) $user['id']);
-            $this->authTokenModel->enforceSessionLimit((int) $user['id'], self::MAX_ACTIVE_SESSIONS);
+            $userId = (int) $user['id'];
 
-            // Generar nuevo token
+            // 4) Normalizar "device fingerprint" (ip + ua)
+            $ip = $this->request->getIPAddress();
+            $ua = (string) $this->request->getUserAgent()->getAgentString(); // IMPORTANT
+
+            // 5) Limpieza + límite global (evita crecimiento por spam)
+            $this->authTokenModel->cleanupExpired($userId);
+            $this->authTokenModel->enforceSessionLimit($userId, self::MAX_ACTIVE_SESSIONS);
+
+            // 6) 1 sesión por dispositivo:
+            // Si ya existe sesión activa para (user_id + ip + ua) => NO crees otra
+            $existing = $this->authTokenModel->findActiveByDevice($userId, $ip, $ua);
+            if ($existing !== null) {
+                // Opcional: podrías retornar 200 con mensaje "ya autenticado" si tu frontend lo maneja
+                return $this->conflict('Ya tienes una sesión activa en este dispositivo. Cierra sesión primero.');
+            }
+
+            // 7) Emitir JWT + jti
             [$jwt, $jti, $expiresAt] = $this->issueJwtForUser($user);
 
-            // Guardar sesión
+            // 8) Guardar sesión (token = jti)
             $this->authTokenModel->createToken(
-                (int) $user['id'],
+                $userId,
                 $jti,
                 $expiresAt,
-                $this->request->getIPAddress(),
-                (string) $this->request->getUserAgent()
+                $ip,
+                $ua
             );
 
             return $this->success([
                 'access_token' => $jwt,
-                'token_type' => 'Bearer',
-                'expires_at' => $expiresAt,
-                'user' => $this->formatUserResponse($user),
+                'token_type'   => 'Bearer',
+                'expires_at'   => $expiresAt,
+                'user'         => $this->formatUserResponse($user),
             ]);
         } catch (\Throwable $e) {
             log_message('error', 'Login error: ' . $e->getMessage());

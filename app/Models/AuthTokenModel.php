@@ -213,4 +213,18 @@ class AuthTokenModel extends Model
 
         return $this->db->affectedRows();
     }
+
+    public function findActiveByDevice(int $userId, string $ip, string $userAgent): ?array
+    {
+        $now = date('Y-m-d H:i:s');
+
+        return $this->select('id, token, expires_at, last_used_at')
+            ->where('user_id', $userId)
+            ->where('ip', $ip)
+            ->where('user_agent', $userAgent)
+            ->where('revoked_at IS NULL', null, false)
+            ->where('expires_at >', $now)
+            ->orderBy('id', 'DESC')
+            ->first();
+    }
 }
